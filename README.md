@@ -9,6 +9,7 @@ GhostSpy est un outil d'administration permettant aux administrateurs système d
 - **Exécution de commandes à distance** - Permet d'exécuter des commandes sur les machines distantes, compatible avec tous les OS.
 - **Surveillance des ressources système** - Collecte et envoie des informations sur l'utilisation du CPU, de la mémoire et du disque.
 - **Visualisation à distance des écrans** - Permet à l'administrateur de voir l'écran des ordinateurs surveillés.
+  (À noter qu'il faut les activer depuis la page de configuration une fois que vous aurez installé et accédé au panel.)
 
 ### Fonctionnalités configurables
 Ces fonctionnalités peuvent être activées ou désactivées selon les besoins :
