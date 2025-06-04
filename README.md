@@ -9,6 +9,7 @@ GhostSpy est un outil d'administration permettant aux administrateurs système d
 - **Exécution de commandes à distance** - Permet d'exécuter des commandes sur les machines distantes, compatible avec tous les OS.
 - **Surveillance des ressources système** - Collecte et envoie des informations sur l'utilisation du CPU, de la mémoire et du disque.
 - **Visualisation à distance des écrans** - Permet à l'administrateur de voir l'écran des ordinateurs surveillés.
+  (À noter qu'il faut les activer depuis la page de configuration une fois que vous aurez installé et accédé au panel.)
 
 ### Fonctionnalités configurables
 Ces fonctionnalités peuvent être activées ou désactivées selon les besoins :
@@ -68,15 +69,19 @@ Des fichiers exécutables (.exe) sont disponibles pour le serveur et le client, 
 ## Configuration et utilisation
 
 ### Configuration du serveur
-1. Exécutez le fichier server.exe sur l'ordinateur de l'administrateur ou un serveur dédié
-2. Définissez un mot de passe pour accéder au panneau de configuration
-3. Le serveur est maintenant prêt à recevoir les connexions des clients
+1. Installer Python
+2. Installer le bibliotheque avec requirement.txt
+3. Exécutez le fichier server.exe sur l'ordinateur de l'administrateur ou un serveur dédié
+4. Définissez un mot de passe pour accéder au panneau de configuration
+5. Le serveur est maintenant prêt à recevoir les connexions des clients
 
 ### Configuration des clients
-1. Télécharger le client.exe sur chaque ordinateur du parc à surveiller dans le fichier C:\Users\LD\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup (Win + r puis écrire `shell:startup` pour avoir accès)
-2. Puis exécuter en mode ADMINISTRATEUR 
-3. Lorsque demandé, saisissez l'adresse IP du serveur (ordinateur administrateur)
-4. Le client se connectera automatiquement au serveur
+1. Installer Python
+2. Installer le bibliotheque avec requirement.txt
+3. Télécharger le client.exe sur chaque ordinateur du parc à surveiller dans le fichier C:\Users\[username]\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup OR (Win + r puis écrire `shell:startup` pour avoir accès)
+4. Puis exécuter en mode ADMINISTRATEUR 
+5. Lorsque demandé, saisissez l'adresse IP du serveur (ordinateur administrateur)
+6. Le client se connectera automatiquement au serveur
 
 ### Utilisation quotidienne
 Une fois configuré, l'administrateur peut accéder au panneau de contrôle via le serveur pour surveiller et gérer tous les PC clients connectés.

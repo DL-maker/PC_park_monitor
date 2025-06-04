@@ -570,7 +570,7 @@ document.addEventListener('DOMContentLoaded', function() {
             .then(data => {
                 if (data.resources) {
                     const cpuUsage = data.resources.cpu_usage;
-                    const ramUsage = data.resources.ram_used;
+                    const ramUsage = data.resources.ram_percent;
                     const cpuThresholdExceeded = data.resources.cpu_threshold_exceeded;
                     const ramThresholdExceeded = data.resources.ram_threshold_exceeded;
 
