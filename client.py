@@ -1035,30 +1035,83 @@ def monitor_ports():
 def handle_pdf_report_command(command, client_id):
     try:
         # Si la commande contient une instruction de génération de PDF
-        if "python pdf_data.py" in command or "import pdf_data" in command:
+        if "GENERATE_PDF_REPORT" in command or "python pdf_data.py" in command or "import pdf_data" in command:
             print(colorama.Fore.CYAN + "⏳ Génération du rapport PDF en cours...")
             
             # Utiliser le chemin absolu pour le PDF de sortie
             output_file = PDF_OUTPUT_FILE
+            print(colorama.Fore.CYAN + f"📁 Fichier de sortie PDF: {output_file}")
             
             # Au lieu d'exécuter via subprocess, importer directement le module
             try:
-                # Essayer d'importer depuis le répertoire courant
+                # S'assurer que pdf_data peut trouver les fichiers de logs
+                print(colorama.Fore.CYAN + "⏳ Recherche du module pdf_data...")
+                
+                # Forcer la réimportation du module pdf_data si déjà importé
+                if 'pdf_data' in sys.modules:
+                    print(colorama.Fore.YELLOW + "⚠️ Rechargement du module pdf_data...")
+                    import importlib
+                    importlib.reload(sys.modules['pdf_data'])
+                
+                # Essayer d'importer depuis le répertoire courant ou le répertoire de l'exécutable
+                pdf_data_paths = []
+                
+                # 1. Répertoire courant
                 if os.path.exists("pdf_data.py"):
-                    print(colorama.Fore.GREEN + "✅ Utilisation du pdf_data.py dans le répertoire courant")
-                    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-                    import pdf_data
-                    pdf_data_module = pdf_data
-                # Sinon, essayer depuis Executables
-                elif os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), "Executables", "pdf_data.py")):
-                    exec_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Executables")
-                    print(colorama.Fore.GREEN + f"✅ Utilisation du pdf_data.py depuis {exec_path}")
-                    sys.path.insert(0, exec_path)
-                    import pdf_data
-                    pdf_data_module = pdf_data
+                    pdf_data_paths.append(os.path.dirname(os.path.abspath(__file__)))
+                
+                # 2. Répertoire de l'exécutable
+                if getattr(sys, 'frozen', False):
+                    # Dans un exécutable
+                    exec_dir = os.path.dirname(sys.executable)
+                    if os.path.exists(os.path.join(exec_dir, "pdf_data.py")):
+                        pdf_data_paths.append(exec_dir)
+                    
+                    # Dans PyInstaller, regarder aussi dans le dossier temporaire d'extraction
+                    temp_dir = getattr(sys, '_MEIPASS', None)
+                    if temp_dir and os.path.exists(os.path.join(temp_dir, "pdf_data.py")):
+                        pdf_data_paths.append(temp_dir)
+                        print(colorama.Fore.CYAN + f"⏳ Répertoire PyInstaller détecté: {temp_dir}")
                 else:
-                    print(colorama.Fore.RED + "❌ Erreur: pdf_data.py introuvable")
-                    return False, "", "Fichier pdf_data.py introuvable"
+                    # Dans un script Python normal
+                    script_dir = os.path.dirname(os.path.abspath(__file__))
+                    if os.path.exists(os.path.join(script_dir, "pdf_data.py")):
+                        pdf_data_paths.append(script_dir)
+                
+                # 3. Répertoire Executables si existant
+                executables_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Executables")
+                if os.path.exists(os.path.join(executables_path, "pdf_data.py")):
+                    pdf_data_paths.append(executables_path)
+                
+                pdf_data_module = None
+                import_error = None
+                
+                for path in pdf_data_paths:
+                    try:
+                        print(colorama.Fore.CYAN + f"⏳ Tentative d'import depuis: {path}")
+                        if path not in sys.path:
+                            sys.path.insert(0, path)
+                        
+                        import pdf_data
+                        pdf_data_module = pdf_data
+                        print(colorama.Fore.GREEN + f"✅ Module pdf_data importé depuis: {path}")
+                        break
+                    except ImportError as e:
+                        import_error = e
+                        print(colorama.Fore.YELLOW + f"⚠️ Échec d'import depuis {path}: {e}")
+                        continue
+                
+                if pdf_data_module is None:
+                    print(colorama.Fore.RED + "❌ Impossible d'importer le module pdf_data")
+                    return False, "", f"Erreur d'importation: {import_error}"
+                
+                # Vérifier que les fichiers de logs existent
+                port_log = os.path.join(BASE_DIR, "port_activity.log")
+                internet_log = os.path.join(BASE_DIR, "internet_usage.log")
+                
+                print(colorama.Fore.CYAN + f"📁 Vérification des logs:")
+                print(colorama.Fore.CYAN + f"  - Port activity: {port_log} ({'✅' if os.path.exists(port_log) else '❌'})")
+                print(colorama.Fore.CYAN + f"  - Internet usage: {internet_log} ({'✅' if os.path.exists(internet_log) else '❌'})")
                 
                 # Générer le PDF en appelant directement la fonction
                 print(colorama.Fore.CYAN + "⏳ Génération du PDF via import direct...")
