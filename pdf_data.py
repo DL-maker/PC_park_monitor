@@ -188,12 +188,21 @@ def get_system_info():
     os_info = f"{platform.system()} {platform.release()}"
     if platform.system() == "Windows":
         try:
-            cpu_info = subprocess.check_output("wmic cpu get name", shell=True).decode().strip().split("\n")[1].strip()
+            # Masquer la fenêtre PowerShell en utilisant CREATE_NO_WINDOW
+            cpu_info = subprocess.check_output(
+                "wmic cpu get name", 
+                shell=True,
+                creationflags=subprocess.CREATE_NO_WINDOW  # Masque la fenêtre
+            ).decode().strip().split("\n")[1].strip()
         except:
             cpu_info = "Unknown"
     else:
         try:
-            cpu_info = subprocess.check_output("lscpu | grep 'Model name' | cut -d: -f2", shell=True).decode().strip()
+            cpu_info = subprocess.check_output(
+                "lscpu | grep 'Model name' | cut -d: -f2", 
+                shell=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
+            ).decode().strip()
         except:
             cpu_info = "Unknown"
     ram = f"{psutil.virtual_memory().total / (1024**3):.0f} GB"
@@ -484,4 +493,4 @@ if __name__ == "__main__":
     if create_pdf_with_data(output_file, data):
         print(f"PDF report successfully generated: {os.path.abspath(output_file)}")
     else:
-        print("Failed to generate PDF report") 
+        print("Failed to generate PDF report")
