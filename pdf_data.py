@@ -17,14 +17,66 @@ from datetime import datetime
 # Fonction pour obtenir le répertoire de base correct selon le contexte d'exécution
 def get_base_directory():
     """Obtenir le répertoire de base pour les fichiers de logs et de données."""
+    base_dir = None
+    
     if getattr(sys, 'frozen', False):
         # Dans un exécutable PyInstaller
-        executable_dir = os.path.dirname(sys.executable)
-        base_dir = os.path.abspath(os.path.join(executable_dir, ".."))
+        if hasattr(sys, '_MEIPASS'):
+            # PyInstaller Bundle - Répertoire temporaire d'extraction
+            temp_dir = sys._MEIPASS
+            print(f"🔍 PyInstaller temp dir détecté: {temp_dir}")
+            
+            # Chercher le répertoire parent de l'exécutable
+            executable_dir = os.path.dirname(sys.executable)
+            parent_dir = os.path.dirname(executable_dir)
+            
+            # Priorité aux logs dans le répertoire parent, puis dans le répertoire de l'exécutable
+            for candidate_dir in [parent_dir, executable_dir, temp_dir]:
+                port_log = os.path.join(candidate_dir, "port_activity.log")
+                internet_log = os.path.join(candidate_dir, "internet_usage.log")
+                
+                if os.path.exists(port_log) and os.path.exists(internet_log):
+                    base_dir = candidate_dir
+                    print(f"✅ Logs trouvés dans: {base_dir}")
+                    break
+                else:
+                    print(f"⚠️ Logs non trouvés dans: {candidate_dir}")
+            
+            # Si aucun log trouvé, utiliser le répertoire parent par défaut
+            if base_dir is None:
+                base_dir = parent_dir
+                print(f"📁 Utilisation du répertoire parent par défaut: {base_dir}")
+        else:
+            # Exécutable simple - utiliser le répertoire de l'exécutable ou son parent
+            executable_dir = os.path.dirname(sys.executable)
+            parent_dir = os.path.dirname(executable_dir)
+            
+            # Tester le répertoire parent d'abord (structure attendue)
+            for candidate_dir in [parent_dir, executable_dir]:
+                port_log = os.path.join(candidate_dir, "port_activity.log")
+                internet_log = os.path.join(candidate_dir, "internet_usage.log")
+                
+                if os.path.exists(port_log) and os.path.exists(internet_log):
+                    base_dir = candidate_dir
+                    print(f"✅ Logs trouvés dans: {base_dir}")
+                    break
+            
+            if base_dir is None:
+                base_dir = parent_dir
+                print(f"📁 Utilisation du répertoire parent par défaut: {base_dir}")
     else:
-        # Dans un script Python normal, utiliser le répertoire du script
+        # Dans un script Python normal - utiliser le répertoire du script
         script_dir = os.path.dirname(os.path.abspath(__file__))
         base_dir = script_dir
+        print(f"📁 Mode script Python - répertoire: {base_dir}")
+    
+    # Vérifier que le répertoire existe
+    if not os.path.exists(base_dir):
+        try:
+            os.makedirs(base_dir, exist_ok=True)
+            print(f"📁 Répertoire créé: {base_dir}")
+        except Exception as e:
+            print(f"❌ Impossible de créer le répertoire {base_dir}: {e}")
     
     return base_dir
 
@@ -287,6 +339,9 @@ def add_section(content, title, data, style, is_dict=False):
 
 def create_pdf_with_data(file_name, data):
     try:
+        print(f"🔄 Début de la génération PDF...")
+        print(f"📊 Données reçues: {type(data)}")
+        
         # Si file_name n'est pas un chemin absolu, le placer dans BASE_DIR
         if not os.path.isabs(file_name):
             file_name = os.path.join(BASE_DIR, file_name)
@@ -299,52 +354,127 @@ def create_pdf_with_data(file_name, data):
         
         print(f"📄 Génération du PDF: {file_name}")
         
-        doc = SimpleDocTemplate(file_name, pagesize=A4)
-        content = []
-        styles = getSampleStyleSheet()
-        styles.add(ParagraphStyle(name='Normal_Left', alignment=TA_LEFT))
-        content.append(Paragraph("Network Information Report", styles['Title']))
-        content.append(Spacer(1, 12))
-
-        # Ajouter le graphique en secteurs seulement si on a des données
-        if protocols and proprotocols:
-            try:
-                pie = PieChart()
-                content.append(pie)
-                content.append(Spacer(1, 12))
-                print("✅ Graphique en secteurs ajouté")
-            except Exception as e:
-                print(f"⚠️ Erreur lors de la création du graphique en secteurs: {e}")
-        else:
-            print("⚠️ Aucune donnée de protocole trouvée pour le graphique")
+        # Créer un fichier temporaire d'abord pour éviter les problèmes de verrouillage
+        temp_file = file_name + ".tmp"
         
-        # Ajouter le graphique en ligne pour l'analyse des téléchargements
         try:
-            content.append(Paragraph("Analyze download data mb/5min", styles['Normal_Left']))
-            line = LineChart()
-            content.append(line)
+            doc = SimpleDocTemplate(temp_file, pagesize=A4)
+            content = []
+            styles = getSampleStyleSheet()
+            styles.add(ParagraphStyle(name='Normal_Left', alignment=TA_LEFT))
+            content.append(Paragraph("Network Information Report", styles['Title']))
             content.append(Spacer(1, 12))
-            print("✅ Graphique en ligne ajouté")
-        except Exception as e:
-            print(f"⚠️ Erreur lors de la création du graphique en ligne: {e}")
 
-        # Ajouter chaque section du rapport
-        try:
-            add_section(content, "Caractéristiques de l'hôte", data["host_characteristics"], styles['Normal_Left'], is_dict=True)
-            add_section(content, "Activité réseau", data["network_activity"], styles['Normal_Left'], is_dict=True)
-            add_section(content, "Informations de connexion", data["connection_information"], styles['Normal_Left'], is_dict=True)
-            add_section(content, "Localisation et environnement", data["localization_and_environment"], styles['Normal_Left'], is_dict=True)
-            add_section(content, "Configuration réseau", data["network_configuration"], styles['Normal_Left'], is_dict=True)
-            print("✅ Toutes les sections ajoutées")
-        except Exception as e:
-            print(f"⚠️ Erreur lors de l'ajout des sections: {e}")
+            # Ajouter le graphique en secteurs seulement si on a des données
+            print(f"📊 Protocoles disponibles: {len(protocols)} éléments")
+            print(f"📊 Données protocoles: {len(proprotocols)} éléments")
+            
+            if protocols and proprotocols and len(protocols) > 0 and len(proprotocols) > 0:
+                try:
+                    # Vérifier que les listes ont la même taille
+                    min_len = min(len(protocols), len(proprotocols))
+                    if min_len > 0:
+                        pie = PieChart()
+                        content.append(pie)
+                        content.append(Spacer(1, 12))
+                        print("✅ Graphique en secteurs ajouté")
+                    else:
+                        print("⚠️ Listes de protocoles vides ou de tailles incompatibles")
+                except Exception as e:
+                    print(f"⚠️ Erreur lors de la création du graphique en secteurs: {e}")
+                    # Continuer sans le graphique
+            else:
+                print("⚠️ Aucune donnée de protocole trouvée pour le graphique")
+                content.append(Paragraph("⚠️ Aucune donnée de trafic réseau disponible", styles['Normal_Left']))
+                content.append(Spacer(1, 12))
+            
+            # Ajouter le graphique en ligne pour l'analyse des téléchargements
+            try:
+                traffic_data = get_five_min_traffic()
+                print(f"📊 Données de trafic 5min: {len(traffic_data)} points")
+                
+                if traffic_data and len(traffic_data) > 0:
+                    content.append(Paragraph("Analyse du trafic internet (MB/5min)", styles['Normal_Left']))
+                    line = LineChart()
+                    content.append(line)
+                    content.append(Spacer(1, 12))
+                    print("✅ Graphique en ligne ajouté")
+                else:
+                    content.append(Paragraph("⚠️ Aucune donnée de trafic internet disponible", styles['Normal_Left']))
+                    content.append(Spacer(1, 12))
+                    print("⚠️ Aucune donnée de trafic pour le graphique en ligne")
+            except Exception as e:
+                print(f"⚠️ Erreur lors de la création du graphique en ligne: {e}")
+                content.append(Paragraph(f"⚠️ Erreur de données de trafic: {str(e)}", styles['Normal_Left']))
+                content.append(Spacer(1, 12))
 
-        doc.build(content)
-        print(f"✅ PDF généré avec succès: {file_name}")
-        return True
+            # Vérifier que data est valide
+            if not isinstance(data, dict):
+                print("⚠️ Données invalides, utilisation de données par défaut")
+                data = {
+                    "host_characteristics": {"erreur": "Données non disponibles"},
+                    "network_activity": {"erreur": "Données non disponibles"},
+                    "connection_information": {"erreur": "Données non disponibles"},
+                    "localization_and_environment": {"erreur": "Données non disponibles"},
+                    "network_configuration": {"erreur": "Données non disponibles"}
+                }
+
+            # Ajouter chaque section du rapport avec vérification
+            sections = [
+                ("Caractéristiques de l'hôte", "host_characteristics"),
+                ("Activité réseau", "network_activity"),
+                ("Informations de connexion", "connection_information"),
+                ("Localisation et environnement", "localization_and_environment"),
+                ("Configuration réseau", "network_configuration")
+            ]
+            
+            for section_title, section_key in sections:
+                try:
+                    section_data = data.get(section_key, {"erreur": "Section non disponible"})
+                    add_section(content, section_title, section_data, styles['Normal_Left'], is_dict=True)
+                    print(f"✅ Section '{section_title}' ajoutée")
+                except Exception as e:
+                    print(f"⚠️ Erreur lors de l'ajout de la section '{section_title}': {e}")
+                    add_section(content, section_title, {"erreur": f"Erreur: {str(e)}"}, styles['Normal_Left'], is_dict=True)
+
+            # Construire le PDF
+            print("🔄 Construction du document PDF...")
+            doc.build(content)
+            
+            # Renommer le fichier temporaire
+            if os.path.exists(temp_file):
+                if os.path.exists(file_name):
+                    os.remove(file_name)
+                os.rename(temp_file, file_name)
+                print(f"✅ PDF généré avec succès: {file_name}")
+                
+                # Vérifier la taille du fichier
+                file_size = os.path.getsize(file_name)
+                print(f"📁 Taille du fichier PDF: {file_size} octets")
+                
+                if file_size < 1024:  # Fichier trop petit, probablement vide ou corrompu
+                    print("⚠️ Fichier PDF généré mais semble trop petit")
+                    return False
+                
+                return True
+            else:
+                print("❌ Fichier temporaire non trouvé après génération")
+                return False
+                
+        except Exception as pdf_error:
+            print(f"❌ Erreur lors de la construction du PDF: {pdf_error}")
+            # Nettoyer le fichier temporaire en cas d'erreur
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except:
+                    pass
+            return False
         
     except Exception as e:
-        print(f"❌ Erreur lors de la génération du PDF: {e}")
+        print(f"❌ Erreur générale lors de la génération du PDF: {e}")
+        import traceback
+        print(f"❌ Traceback: {traceback.format_exc()}")
         return False
 
 # Main function to generate PDF when run directly
