@@ -72,7 +72,7 @@ seen_connections = set()
 colorama.init(autoreset=True)
 
 # Configuration
-API_KEY = "API"  # Remplacez par votre clé API VirusTotal
+API_KEY = "85d720a11d8b0436657a8efcd063742fcec5b49cbd3ac16396be7b324b1fa98a"  # Remplacez par votre clé API VirusTotal
 VT_BASE_URL = "https://www.virustotal.com/api/v3"
 
 # Paramètres des fonctionnalités (désactivées par défaut)
@@ -933,6 +933,21 @@ def main():
         if FILE_DETECTION_ENABLED and VIRUSTOTAL_ENABLED:
             # Exécuter la logique de scan VirusTotal ici
             logger.debug("Scan des fichiers suspects actif")
+            
+            # Ajouter un compteur pour éviter de scanner trop fréquemment
+            if not hasattr(main, 'scan_counter'):
+                main.scan_counter = 0
+            
+            main.scan_counter += 1
+            # Scanner toutes les 6 itérations (environ toutes les 30 secondes)
+            if main.scan_counter >= 6:
+                try:
+                    scan_result = scan_recent_files(client_id, RECENT_THRESHOLD_MINUTES, 5)
+                    logger.info(f"Scan terminé: {scan_result.get('scanned', 0)} fichiers analysés")
+                    main.scan_counter = 0
+                except Exception as e:
+                    logger.error(f"Erreur lors du scan des fichiers suspects: {e}")
+                    main.scan_counter = 0
         else:
             logger.debug("Le scan des fichiers suspects est désactivé")
             
@@ -1042,63 +1057,79 @@ def handle_pdf_report_command(command, client_id):
             output_file = PDF_OUTPUT_FILE
             print(colorama.Fore.CYAN + f"📁 Fichier de sortie PDF: {output_file}")
             
+            # Supprimer l'ancien fichier PDF s'il existe pour éviter les conflits
+            if os.path.exists(output_file):
+                try:
+                    os.remove(output_file)
+                    print(colorama.Fore.CYAN + f"🗑️ Ancien fichier PDF supprimé: {output_file}")
+                except Exception as e:
+                    print(colorama.Fore.YELLOW + f"⚠️ Impossible de supprimer l'ancien PDF: {e}")
+            
             # Au lieu d'exécuter via subprocess, importer directement le module
             try:
-                # S'assurer que pdf_data peut trouver les fichiers de logs
                 print(colorama.Fore.CYAN + "⏳ Recherche du module pdf_data...")
+                
+                # Déterminer les chemins de recherche prioritaires
+                search_paths = []
+                
+                if getattr(sys, 'frozen', False):
+                    # Dans un exécutable PyInstaller
+                    executable_dir = os.path.dirname(sys.executable)
+                    parent_dir = os.path.dirname(executable_dir)
+                    
+                    # Priorité: répertoire parent, puis exécutable, puis temp PyInstaller
+                    search_paths.extend([parent_dir, executable_dir])
+                    
+                    if hasattr(sys, '_MEIPASS'):
+                        search_paths.append(sys._MEIPASS)
+                        print(colorama.Fore.CYAN + f"⏳ Répertoire PyInstaller détecté: {sys._MEIPASS}")
+                else:
+                    # Dans un script Python normal
+                    script_dir = os.path.dirname(os.path.abspath(__file__))
+                    search_paths.append(script_dir)
+                
+                # Ajouter aussi le répertoire courant
+                search_paths.append(os.getcwd())
                 
                 # Forcer la réimportation du module pdf_data si déjà importé
                 if 'pdf_data' in sys.modules:
                     print(colorama.Fore.YELLOW + "⚠️ Rechargement du module pdf_data...")
                     import importlib
-                    importlib.reload(sys.modules['pdf_data'])
-                
-                # Essayer d'importer depuis le répertoire courant ou le répertoire de l'exécutable
-                pdf_data_paths = []
-                
-                # 1. Répertoire courant
-                if os.path.exists("pdf_data.py"):
-                    pdf_data_paths.append(os.path.dirname(os.path.abspath(__file__)))
-                
-                # 2. Répertoire de l'exécutable
-                if getattr(sys, 'frozen', False):
-                    # Dans un exécutable
-                    exec_dir = os.path.dirname(sys.executable)
-                    if os.path.exists(os.path.join(exec_dir, "pdf_data.py")):
-                        pdf_data_paths.append(exec_dir)
-                    
-                    # Dans PyInstaller, regarder aussi dans le dossier temporaire d'extraction
-                    temp_dir = getattr(sys, '_MEIPASS', None)
-                    if temp_dir and os.path.exists(os.path.join(temp_dir, "pdf_data.py")):
-                        pdf_data_paths.append(temp_dir)
-                        print(colorama.Fore.CYAN + f"⏳ Répertoire PyInstaller détecté: {temp_dir}")
-                else:
-                    # Dans un script Python normal
-                    script_dir = os.path.dirname(os.path.abspath(__file__))
-                    if os.path.exists(os.path.join(script_dir, "pdf_data.py")):
-                        pdf_data_paths.append(script_dir)
-                
-                # 3. Répertoire Executables si existant
-                executables_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Executables")
-                if os.path.exists(os.path.join(executables_path, "pdf_data.py")):
-                    pdf_data_paths.append(executables_path)
+                    try:
+                        importlib.reload(sys.modules['pdf_data'])
+                    except Exception as reload_error:
+                        print(colorama.Fore.YELLOW + f"⚠️ Erreur lors du rechargement: {reload_error}")
+                        # Supprimer le module du cache pour forcer une nouvelle importation
+                        del sys.modules['pdf_data']
                 
                 pdf_data_module = None
                 import_error = None
                 
-                for path in pdf_data_paths:
+                # Essayer d'importer depuis chaque chemin
+                for path in search_paths:
                     try:
-                        print(colorama.Fore.CYAN + f"⏳ Tentative d'import depuis: {path}")
-                        if path not in sys.path:
-                            sys.path.insert(0, path)
+                        pdf_file_path = os.path.join(path, "pdf_data.py")
+                        print(colorama.Fore.CYAN + f"⏳ Vérification: {pdf_file_path}")
                         
-                        import pdf_data
-                        pdf_data_module = pdf_data
-                        print(colorama.Fore.GREEN + f"✅ Module pdf_data importé depuis: {path}")
-                        break
+                        if os.path.exists(pdf_file_path):
+                            print(colorama.Fore.CYAN + f"✅ Fichier pdf_data.py trouvé dans: {path}")
+                            
+                            if path not in sys.path:
+                                sys.path.insert(0, path)
+                                print(colorama.Fore.CYAN + f"📁 Chemin ajouté au sys.path: {path}")
+                            
+                            import pdf_data
+                            pdf_data_module = pdf_data
+                            print(colorama.Fore.GREEN + f"✅ Module pdf_data importé depuis: {path}")
+                            break
+                        else:
+                            print(colorama.Fore.YELLOW + f"⚠️ pdf_data.py non trouvé dans: {path}")
                     except ImportError as e:
                         import_error = e
                         print(colorama.Fore.YELLOW + f"⚠️ Échec d'import depuis {path}: {e}")
+                        continue
+                    except Exception as e:
+                        print(colorama.Fore.YELLOW + f"⚠️ Erreur inattendue lors de l'import depuis {path}: {e}")
                         continue
                 
                 if pdf_data_module is None:
@@ -1110,15 +1141,66 @@ def handle_pdf_report_command(command, client_id):
                 internet_log = os.path.join(BASE_DIR, "internet_usage.log")
                 
                 print(colorama.Fore.CYAN + f"📁 Vérification des logs:")
+                print(colorama.Fore.CYAN + f"  - BASE_DIR: {BASE_DIR}")
                 print(colorama.Fore.CYAN + f"  - Port activity: {port_log} ({'✅' if os.path.exists(port_log) else '❌'})")
                 print(colorama.Fore.CYAN + f"  - Internet usage: {internet_log} ({'✅' if os.path.exists(internet_log) else '❌'})")
                 
+                # Si les logs n'existent pas dans BASE_DIR, les chercher ailleurs
+                if not os.path.exists(port_log) or not os.path.exists(internet_log):
+                    print(colorama.Fore.YELLOW + "⚠️ Logs non trouvés dans BASE_DIR, recherche dans d'autres emplacements...")
+                    
+                    for search_path in search_paths:
+                        alt_port_log = os.path.join(search_path, "port_activity.log")
+                        alt_internet_log = os.path.join(search_path, "internet_usage.log")
+                        
+                        if os.path.exists(alt_port_log) and os.path.exists(alt_internet_log):
+                            print(colorama.Fore.GREEN + f"✅ Logs trouvés dans: {search_path}")
+                            # Copier les logs vers BASE_DIR pour pdf_data
+                            try:
+                                import shutil
+                                shutil.copy2(alt_port_log, port_log)
+                                shutil.copy2(alt_internet_log, internet_log)
+                                print(colorama.Fore.GREEN + "✅ Logs copiés vers BASE_DIR")
+                            except Exception as copy_error:
+                                print(colorama.Fore.YELLOW + f"⚠️ Erreur lors de la copie des logs: {copy_error}")
+                            break
+                
                 # Générer le PDF en appelant directement la fonction
                 print(colorama.Fore.CYAN + "⏳ Génération du PDF via import direct...")
-                success = pdf_data_module.create_pdf_with_data(output_file, pdf_data_module.data)
                 
-                if not success:
-                    print(colorama.Fore.RED + "❌ Échec de la génération du PDF via import direct")
+                # Appeler avec timeout pour éviter les blocages infinis
+                import threading
+                import time
+                
+                pdf_generation_success = False
+                pdf_generation_error = None
+                
+                def generate_pdf_thread():
+                    nonlocal pdf_generation_success, pdf_generation_error
+                    try:
+                        pdf_generation_success = pdf_data_module.create_pdf_with_data(output_file, pdf_data_module.data)
+                    except Exception as e:
+                        pdf_generation_error = e
+                        pdf_generation_success = False
+                
+                # Lancer la génération dans un thread séparé avec timeout
+                pdf_thread = threading.Thread(target=generate_pdf_thread)
+                pdf_thread.daemon = True
+                pdf_thread.start()
+                
+                # Attendre avec timeout de 120 secondes
+                pdf_thread.join(timeout=120)
+                
+                if pdf_thread.is_alive():
+                    print(colorama.Fore.RED + "❌ Timeout lors de la génération du PDF (120s)")
+                    return False, "", "Timeout lors de la génération du PDF"
+                
+                if pdf_generation_error:
+                    print(colorama.Fore.RED + f"❌ Erreur lors de la génération du PDF: {pdf_generation_error}")
+                    return False, "", f"Erreur lors de la génération: {str(pdf_generation_error)}"
+                
+                if not pdf_generation_success:
+                    print(colorama.Fore.RED + "❌ Échec de la génération du PDF")
                     return False, "", "Échec de la génération du PDF"
                     
             except ImportError as e:
@@ -1131,11 +1213,16 @@ def handle_pdf_report_command(command, client_id):
             # Vérifier que le PDF a été généré correctement
             if os.path.exists(output_file):
                 pdf_path = output_file  # Déjà un chemin absolu
+                pdf_size = os.path.getsize(pdf_path)
                 print(colorama.Fore.GREEN + f"✅ PDF généré avec succès: {pdf_path}")
+                print(colorama.Fore.GREEN + f"📁 Taille du fichier: {pdf_size} octets")
+                
+                # Vérifier que le fichier n'est pas vide
+                if pdf_size < 1024:
+                    print(colorama.Fore.YELLOW + "⚠️ Le fichier PDF semble trop petit, possible erreur")
                 
                 try:
                     # Envoyer le fichier au serveur
-                    pdf_size = os.path.getsize(pdf_path)
                     print(colorama.Fore.GREEN + f"📁 Envoi du fichier PDF ({pdf_size} octets) au serveur...")
                     
                     # Vérifier l'URL du serveur et l'ID client
@@ -1144,26 +1231,43 @@ def handle_pdf_report_command(command, client_id):
                     url = f"{server_url}/client/{client_id}/upload_pdf"
                     print(colorama.Fore.CYAN + f"⏳ URL d'envoi: {url}")
                     
-                    # Envoyer le fichier
-                    with open(pdf_path, 'rb') as pdf_file:
-                        files = {'pdf_file': (os.path.basename(pdf_path), pdf_file, 'application/pdf')}
-                        
-                        # Augmenter le timeout et ajouter des détails de débogage
-                        print(colorama.Fore.CYAN + "⏳ Envoi de la requête POST...")
-                        response = requests.post(
-                            url,
-                            files=files,
-                            timeout=60  # Augmenter le timeout à 60 secondes
-                        )
-                        print(colorama.Fore.CYAN + f"⏳ Statut de la réponse: {response.status_code}")
-                        
-                        if response.status_code == 200:
-                            print(colorama.Fore.GREEN + "✅ Rapport PDF envoyé avec succès au serveur")
-                            return True, "Rapport PDF généré et envoyé avec succès", ""
-                        else:
-                            print(colorama.Fore.YELLOW + f"⚠️ Le serveur a retourné une erreur: {response.status_code}")
-                            print(colorama.Fore.YELLOW + f"⚠️ Détails de l'erreur: {response.text}")
-                            return True, f"PDF généré mais erreur d'envoi ({response.status_code}): {response.text}", ""
+                    # Envoyer le fichier avec retry
+                    max_retries = 3
+                    for attempt in range(max_retries):
+                        try:
+                            with open(pdf_path, 'rb') as pdf_file:
+                                files = {'pdf_file': (os.path.basename(pdf_path), pdf_file, 'application/pdf')}
+                                
+                                print(colorama.Fore.CYAN + f"⏳ Tentative d'envoi {attempt + 1}/{max_retries}...")
+                                response = requests.post(
+                                    url,
+                                    files=files,
+                                    timeout=120  # Timeout de 120 secondes
+                                )
+                                print(colorama.Fore.CYAN + f"⏳ Statut de la réponse: {response.status_code}")
+                                
+                                if response.status_code == 200:
+                                    print(colorama.Fore.GREEN + "✅ Rapport PDF envoyé avec succès au serveur")
+                                    return True, "Rapport PDF généré et envoyé avec succès", ""
+                                else:
+                                    print(colorama.Fore.YELLOW + f"⚠️ Le serveur a retourné une erreur: {response.status_code}")
+                                    print(colorama.Fore.YELLOW + f"⚠️ Détails de l'erreur: {response.text}")
+                                    if attempt == max_retries - 1:
+                                        return True, f"PDF généré mais erreur d'envoi ({response.status_code}): {response.text}", ""
+                                    else:
+                                        time.sleep(2)  # Attendre avant de réessayer
+                                        continue
+                        except requests.exceptions.Timeout:
+                            print(colorama.Fore.YELLOW + f"⚠️ Timeout lors de l'envoi (tentative {attempt + 1})")
+                            if attempt == max_retries - 1:
+                                return True, "PDF généré mais timeout lors de l'envoi", ""
+                            time.sleep(5)
+                        except Exception as send_error:
+                            print(colorama.Fore.YELLOW + f"⚠️ Erreur lors de l'envoi (tentative {attempt + 1}): {send_error}")
+                            if attempt == max_retries - 1:
+                                return True, f"PDF généré mais erreur d'envoi: {str(send_error)}", ""
+                            time.sleep(2)
+                    
                 except Exception as e:
                     print(colorama.Fore.YELLOW + f"⚠️ Erreur lors de l'envoi du PDF: {str(e)}")
                     return True, f"PDF généré mais erreur d'envoi: {str(e)}", ""
@@ -1175,6 +1279,8 @@ def handle_pdf_report_command(command, client_id):
         return False, "", ""
     except Exception as e:
         print(colorama.Fore.RED + f"❌ Exception lors du traitement de la commande PDF: {str(e)}")
+        import traceback
+        print(colorama.Fore.RED + f"❌ Traceback complet: {traceback.format_exc()}")
         return False, "", str(e)
 
 # Fonction simplifiée pour surveiller les dossiers et enregistrer les modifications

@@ -771,34 +771,115 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function fetchScanResults(clientId) {
-        fetch(`/client/${clientId}/scan_file`)
+        fetch(`/client/${clientId}/virus_scans`)
             .then(response => response.json())
             .then(data => {
                 const container = document.getElementById('scan-results-container');
                 container.innerHTML = '';
 
-                if (!data.scan_file) {
-                    container.innerHTML = '<p>Aucun fichier suspect détecté récemment</p>';
+                if (!data.scans || data.scans.length === 0) {
+                    container.innerHTML = '<p>Aucun fichier scanné récemment</p>';
                     return;
                 }
 
-                const result = data.scan_file;
-                const resultDiv = document.createElement('div');
-                const isSuspicious = result.is_suspicious === true;
+                // Créer un en-tête pour les résultats
+                const headerDiv = document.createElement('div');
+                headerDiv.innerHTML = `<h4>Résultats de scan VirusTotal (${data.scans.length} fichiers)</h4>`;
+                headerDiv.className = 'scan-header';
+                container.appendChild(headerDiv);
+
+                // Trier les scans par date de scan (plus récent en premier)
+                const sortedScans = data.scans.sort((a, b) => new Date(b.scan_date) - new Date(a.scan_date));
                 
-                resultDiv.className = `scan-result ${isSuspicious ? 'malicious' : 'clean'}`;
-                resultDiv.innerHTML = `
-                    <h4>${result.file_name || 'Fichier inconnu'} - ${isSuspicious ? '⚠️ Suspect' : '✅ Normal'}</h4>
-                    <p><strong>Chemin:</strong> ${result.file_path || 'Non spécifié'}</p>
-                    <p><strong>Taille:</strong> ${formatFileSize(result.file_size || 0)}</p>
-                    <p><strong>Date de détection:</strong> ${new Date(result.scan_date || Date.now()).toLocaleString()}</p>
-                `;
-                container.appendChild(resultDiv);
+                sortedScans.forEach(scan => {
+                    const resultDiv = document.createElement('div');
+                    
+                    // Déterminer le statut et la couleur
+                    let status = '';
+                    let statusIcon = '';
+                    let statusClass = '';
+                    
+                    if (scan.status === 'error') {
+                        status = `❌ Erreur: ${scan.error_message || 'Erreur inconnue'}`;
+                        statusClass = 'error';
+                    } else if (scan.status === 'quota_exceeded') {
+                        status = '⚠️ Quota VirusTotal dépassé';
+                        statusClass = 'warning';
+                    } else if (scan.status === 'pending') {
+                        status = '⏳ Analyse en cours...';
+                        statusClass = 'pending';
+                    } else if (scan.status === 'complete' && scan.result) {
+                        const isMalicious = scan.result.is_malicious;
+                        const maliciousCount = scan.result.malicious || 0;
+                        const suspiciousCount = scan.result.suspicious || 0;
+                        const totalEngines = scan.result.total_engines || 0;
+                        
+                        if (isMalicious) {
+                            statusIcon = '🦠';
+                            status = `Malveillant (${maliciousCount + suspiciousCount}/${totalEngines} détections)`;
+                            statusClass = 'malicious';
+                        } else {
+                            statusIcon = '✅';
+                            status = `Sécurisé (0/${totalEngines} détections)`;
+                            statusClass = 'clean';
+                        }
+                    } else {
+                        status = '❓ Statut inconnu';
+                        statusClass = 'unknown';
+                    }
+                    
+                    resultDiv.className = `scan-result ${statusClass}`;
+                    resultDiv.innerHTML = `
+                        <div class="scan-file-info">
+                            <h5>${statusIcon} ${scan.file_name || 'Fichier inconnu'}</h5>
+                            <p><strong>Statut:</strong> ${status}</p>
+                            <p><strong>Date de scan:</strong> ${new Date(scan.scan_date).toLocaleString()}</p>
+                            ${scan.file_hash ? `<p><strong>Hash SHA256:</strong> <code>${scan.file_hash.substring(0, 16)}...</code></p>` : ''}
+                        </div>
+                    `;
+                    
+                    // Ajouter les détails de détection si disponibles
+                    if (scan.status === 'complete' && scan.result && scan.result.detected_engines) {
+                        const detailsDiv = document.createElement('div');
+                        detailsDiv.className = 'scan-details';
+                        detailsDiv.innerHTML = '<h6>Moteurs ayant détecté des menaces:</h6>';
+                        
+                        const enginesList = document.createElement('ul');
+                        Object.entries(scan.result.detected_engines).forEach(([engine, data]) => {
+                            const listItem = document.createElement('li');
+                            listItem.innerHTML = `<strong>${engine}:</strong> ${data.result} (${data.category})`;
+                            enginesList.appendChild(listItem);
+                        });
+                        detailsDiv.appendChild(enginesList);
+                        resultDiv.appendChild(detailsDiv);
+                    }
+                    
+                    // Ajouter les informations de vérification locale si disponibles
+                    if (scan.local_check) {
+                        const localDiv = document.createElement('div');
+                        localDiv.className = 'local-check';
+                        localDiv.innerHTML = `
+                            <h6>Analyse locale:</h6>
+                            <p><strong>Suspect:</strong> ${scan.local_check.suspicious ? 'Oui' : 'Non'}</p>
+                            ${scan.local_check.reasons && scan.local_check.reasons.length > 0 ? 
+                                `<p><strong>Raisons:</strong> ${scan.local_check.reasons.join(', ')}</p>` : ''}
+                        `;
+                        resultDiv.appendChild(localDiv);
+                    }
+                    
+                    container.appendChild(resultDiv);
+                });
             })
             .catch(error => {
-                console.error('Erreur lors de la récupération des fichiers suspects:', error);
+                console.error('Erreur lors de la récupération des résultats VirusTotal:', error);
                 const container = document.getElementById('scan-results-container');
-                container.innerHTML = '<p>Erreur lors de la récupération des fichiers suspects</p>';
+                container.innerHTML = `
+                    <div class="scan-error">
+                        <h4>❌ Erreur lors de la récupération des fichiers suspects</h4>
+                        <p>Impossible de charger les résultats de scan VirusTotal.</p>
+                        <p>Détails: ${error.message || 'Erreur de connexion'}</p>
+                    </div>
+                `;
             });
     }
 
@@ -823,6 +904,20 @@ document.addEventListener('DOMContentLoaded', function() {
     // Add CSS for scan detection details
     const style = document.createElement('style');
     style.textContent = `
+        .scan-header {
+            background-color: #f7fafc;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 15px;
+            border-left: 4px solid #3b82f6;
+        }
+        
+        .scan-header h4 {
+            margin: 0;
+            color: #2d3748;
+            font-size: 16px;
+        }
+        
         .scan-result {
             background-color: #f8faff;
             border-radius: 8px;
@@ -831,30 +926,166 @@ document.addEventListener('DOMContentLoaded', function() {
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
             border-left: 4px solid #3b82f6;
         }
+        
         .scan-result.malicious {
             background-color: #fff5f5;
             border-left-color: #e53e3e;
         }
+        
         .scan-result.clean {
             border-left-color: #38a169;
             background-color: #f0fff4;
         }
-        .scan-result h4 {
+        
+        .scan-result.error {
+            background-color: #fffaf0;
+            border-left-color: #ed8936;
+        }
+        
+        .scan-result.warning {
+            background-color: #fffbeb;
+            border-left-color: #f59e0b;
+        }
+        
+        .scan-result.pending {
+            background-color: #f0f9ff;
+            border-left-color: #0ea5e9;
+        }
+        
+        .scan-result.unknown {
+            background-color: #f9fafb;
+            border-left-color: #6b7280;
+        }
+        
+        .scan-file-info h5 {
             margin-top: 0;
             margin-bottom: 10px;
             color: #4a5568;
             font-size: 16px;
+            font-weight: 600;
         }
-        .scan-result p {
+        
+        .scan-result.malicious .scan-file-info h5 {
+            color: #e53e3e;
+        }
+        
+        .scan-result.clean .scan-file-info h5 {
+            color: #38a169;
+        }
+        
+        .scan-result.error .scan-file-info h5 {
+            color: #ed8936;
+        }
+        
+        .scan-result.warning .scan-file-info h5 {
+            color: #f59e0b;
+        }
+        
+        .scan-file-info p {
             margin: 5px 0;
             font-size: 14px;
             color: #4a5568;
         }
-        .scan-result.malicious h4 {
-            color: #e53e3e;
+        
+        .scan-file-info code {
+            background-color: #e2e8f0;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            color: #2d3748;
         }
-        .scan-result.clean h4 {
-            color: #38a169;
+        
+        .scan-details {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #e2e8f0;
+        }
+        
+        .scan-details h6 {
+            margin: 0 0 10px 0;
+            color: #2d3748;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        
+        .scan-details ul {
+            margin: 0;
+            padding-left: 20px;
+            list-style-type: disc;
+        }
+        
+        .scan-details li {
+            margin: 5px 0;
+            font-size: 13px;
+            color: #4a5568;
+        }
+        
+        .local-check {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #e2e8f0;
+            background-color: rgba(99, 102, 241, 0.05);
+            border-radius: 6px;
+            padding: 10px;
+        }
+        
+        .local-check h6 {
+            margin: 0 0 8px 0;
+            color: #5b21b6;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        
+        .local-check p {
+            margin: 5px 0;
+            font-size: 13px;
+            color: #5b21b6;
+        }
+        
+        .scan-error {
+            background-color: #fff5f5;
+            border: 1px solid #feb2b2;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+        }
+        
+        .scan-error h4 {
+            margin-top: 0;
+            color: #e53e3e;
+            font-size: 18px;
+        }
+        
+        .scan-error p {
+            margin: 8px 0;
+            color: #4a5568;
+            font-size: 14px;
+        }
+        
+        .malware-scan-area {
+            background-color: #ffffff;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07);
+            border: 1px solid #e2e8f0;
+        }
+        
+        .malware-scan-area h3 {
+            margin-top: 0;
+            margin-bottom: 20px;
+            color: #2d3748;
+            font-size: 18px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .malware-scan-area h3:before {
+            content: "🛡️";
+            font-size: 20px;
         }
     `;
     document.head.appendChild(style);

