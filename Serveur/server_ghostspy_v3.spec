@@ -1,21 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
-
-datas = [('frontend', 'frontend'), ('schema.sql', '.'), ('SpyGhost_icon.ico', '.'), ('requirements.txt', '.')]
-binaries = []
-hiddenimports = ['flask', 'customtkinter', 'sqlite3', 'PIL']
-tmp_ret = collect_all('flask')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-tmp_ret = collect_all('customtkinter')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
     ['server.py'],
     pathex=[],
-    binaries=binaries,
-    datas=datas,
-    hiddenimports=hiddenimports,
+    binaries=[],
+    datas=[('frontend', 'frontend'), ('schema.sql', '.'), ('requirements.txt', '.')],
+    hiddenimports=['flask', 'customtkinter', 'sqlite3', 'PIL', 'cryptography', 'ssl', 'cryptography.hazmat.primitives.asymmetric.rsa', 'cryptography.hazmat.primitives.serialization', 'cryptography.x509', 'cryptography.hazmat.primitives.hashes'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
