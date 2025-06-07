@@ -6,6 +6,7 @@ import platform
 import requests
 import socket
 import subprocess
+import platform
 from collections import Counter
 import psutil
 import os
