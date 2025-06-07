@@ -180,7 +180,7 @@ class ClientInterface(ctk.CTk):
 
     def login(self):
         ip_input = self.ip_entry.get()
-        server_url = f"http://{ip_input}:5000"
+        server_url = f"http://{ip_input}:5000"  # HTTP simple
         
         #data
         client_name = platform.node()
