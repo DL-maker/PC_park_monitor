@@ -366,8 +366,17 @@ def execute_command(command):
                 return None, "Échec du dégel de l'écran"
         
         else:
-            # Exécution normale de commande système
-            result = subprocess.run(command, shell=True, capture_output=True, text=True)
+            # Exécution normale de commande système avec fenêtre masquée
+            if platform.system() == "Windows":
+                result = subprocess.run(
+                    command, 
+                    shell=True, 
+                    capture_output=True, 
+                    text=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW  # Masque la fenêtre
+                )
+            else:
+                result = subprocess.run(command, shell=True, capture_output=True, text=True)
             return result.stdout, result.stderr
     except Exception as e:
         return None, str(e)
@@ -1443,9 +1452,14 @@ def get_installed_windows_apps():
         
     installed_apps = set()
     try:
-        # Utiliser PowerShell pour récupérer les applications
+        # Utiliser PowerShell pour récupérer les applications avec fenêtre masquée
         powershell_cmd = "Get-ItemProperty HKLM:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* | Select-Object DisplayName"
-        proc = subprocess.Popen(["powershell", "-Command", powershell_cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc = subprocess.Popen(
+            ["powershell", "-Command", powershell_cmd], 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW  # Masque la fenêtre
+        )
         stdout, stderr = proc.communicate()
         
         # Traiter la sortie
@@ -1457,7 +1471,12 @@ def get_installed_windows_apps():
                 
         # Vérifier également le registre 64 bits
         powershell_cmd = "Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* | Select-Object DisplayName"
-        proc = subprocess.Popen(["powershell", "-Command", powershell_cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc = subprocess.Popen(
+            ["powershell", "-Command", powershell_cmd], 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW  # Masque la fenêtre
+        )
         stdout, stderr = proc.communicate()
         
         # Traiter la sortie
