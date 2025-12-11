@@ -103,6 +103,6 @@ Ce projet est sous licence GPL-3.0.
 
 ## Contributeurs
 * **DL-maker**
-* **BatyaBatkovich** (Lucas Daifi)
+* **BatyaBatkovich** 
 * **Thisisnnn**
 * **prometeu1**
