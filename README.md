@@ -1,6 +1,6 @@
 # PC park monitor
 ## Description
-GhostSpy est un outil d'administration permettant aux administrateurs système de contrôler et surveiller un parc de PC au sein d'un réseau local d'entreprise. Il offre des fonctionnalités de surveillance et de contrôle à distance pour faciliter la gestion des ordinateurs.
+PC_park_monitor est un outil d'administration permettant aux administrateurs système de contrôler et surveiller un parc de PC au sein d'un réseau local d'entreprise. Il offre des fonctionnalités de surveillance et de contrôle à distance pour faciliter la gestion des ordinateurs.
 
 ## Fonctionnalités principales
 
@@ -86,7 +86,7 @@ Des fichiers exécutables (.exe) sont disponibles pour le serveur et le client, 
 Une fois configuré, l'administrateur peut accéder au panneau de contrôle via le serveur pour surveiller et gérer tous les PC clients connectés.
 
 ## Considérations de sécurité
-- GhostSpy fonctionne uniquement sur le réseau local/VLAN de l'entreprise et ne transmet pas de données à des serveurs externes
+- PC_park_monitor fonctionne uniquement sur le réseau local/VLAN de l'entreprise et ne transmet pas de données à des serveurs externes
 - Les données collectées et les actions effectuées sont sous la responsabilité de l'administrateur et doivent respecter les contrats de travail et les législations en vigueur
 - Aucune responsabilité n'est assumée par les développeurs concernant l'utilisation abusive de l'outil
 
